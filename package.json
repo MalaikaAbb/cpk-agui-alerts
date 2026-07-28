@@ -1,14 +1,16 @@
 {
   "name": "cpk-agui-alert",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "Polls CopilotKit and ag-ui every 6 hours and reports merged/released changes to Google Chat",
+  "description": "Polls CopilotKit and ag-ui on a schedule and reports docs changes and package releases to Google Chat",
   "type": "module",
   "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
     "build": "tsc",
-    "start": "node dist/index.js",
-    "dry-run": "npm run build && DRY_RUN=true node dist/index.js",
-    "test": "npm run build && node --test dist/**/*.test.js",
+    "dry-run": "tsc && node dist/dev/dry-run.js",
+    "test": "tsc && node --test \"dist/**/*.test.js\"",
     "typecheck": "tsc --noEmit"
   },
   "engines": {
@@ -16,6 +18,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "wrangler": "^4.114.0"
   }
 }

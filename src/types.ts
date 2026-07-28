@@ -16,7 +16,7 @@ export type Category = "Packages" | "Docs" | "ShowcaseDemo" | "Examples" | "Inte
  * Deliberately a total order with no ties: equal priorities would leave ordering
  * up to whichever file happened to be encountered first in a diff, making report
  * layout vary run to run. Whether a category is *highlighted* is a separate
- * question, answered by HIGHLIGHTED_CATEGORIES below.
+ * question, answered by PR_DETAIL_CATEGORIES below.
  */
 export const CATEGORY_PRIORITY: Record<Category, number> = {
   Docs: 0,
@@ -27,7 +27,25 @@ export const CATEGORY_PRIORITY: Record<Category, number> = {
 };
 
 /** Categories rendered with full per-PR detail. Everything else gets a count only. */
-export const HIGHLIGHTED_CATEGORIES: readonly Category[] = ["Docs", "Packages"];
+export const PR_DETAIL_CATEGORIES: readonly Category[] = ["Docs"];
+
+/**
+ * Categories reported only when a release ships them, never on merge.
+ *
+ * Package work is reported as "these packages were published at these versions",
+ * not as a stream of merged PRs — a merged package PR is not yet usable by
+ * anyone, so it is deliberately silent until a release makes it real.
+ */
+export const RELEASE_DRIVEN_CATEGORIES: readonly Category[] = ["Packages"];
+
+/**
+ * PR categories that on their own justify sending a notification.
+ *
+ * A published release always triggers one too. Everything else — showcase,
+ * examples, internal — is context that rides along on a notification something
+ * else earned; it never fires one by itself.
+ */
+export const NOTIFY_TRIGGER_CATEGORIES: readonly Category[] = ["Docs"];
 
 export const CATEGORY_LABEL: Record<Category, string> = {
   Packages: "📦 Packages",
@@ -49,10 +67,28 @@ export interface CategoryRule {
   note?: string;
 }
 
+/**
+ * Where a repo records which packages a release published.
+ *
+ * - `tag`  — the tag itself names the package (CopilotKit: `channels/v0.3.0`).
+ * - `body` — the release notes contain a "Packages Published" table (ag-ui,
+ *            whose tags are repo-wide dates like `release/2026-07-28`).
+ */
+export type ReleasePackageSource = "tag" | "body";
+
 export interface RepoConfig {
   owner: string;
   repo: string;
   rules: CategoryRule[];
+  releasePackageSource: ReleasePackageSource;
+}
+
+/** A package confirmed published by a release. */
+export interface ReleasedPackage {
+  name: string;
+  version: string;
+  /** e.g. "PyPI", "NuGet" — only known when parsed from a release body. */
+  ecosystem?: string;
 }
 
 /** The `owner/repo` string used as the state-file key and in report headers. */
@@ -66,8 +102,6 @@ export interface PullRequest {
   author: string;
   isBot: boolean;
   mergedAt: string;
-  /** Populated for merge, squash, and rebase strategies alike. */
-  mergeCommitSha: string | null;
 }
 
 export interface Release {
@@ -77,6 +111,9 @@ export interface Release {
   htmlUrl: string;
   publishedAt: string;
   isPrerelease: boolean;
+  body: string | null;
+  /** Packages this release published, resolved per the repo's source strategy. */
+  packages: ReleasedPackage[];
 }
 
 /** Per-category classification result for a single PR. */
@@ -94,8 +131,6 @@ export interface ClassifiedPR {
   totalFiles: number;
   /** True when GitHub truncated the file list (very large PR). */
   truncated: boolean;
-  /** Tag of the release this PR shipped in, if we could confirm one. */
-  releasedIn: string | null;
 }
 
 export interface RepoReport {
@@ -128,4 +163,29 @@ export interface RepoState {
 export interface State {
   schemaVersion: number;
   repos: Record<RepoKey, RepoState>;
+}
+
+/**
+ * The subset of Cloudflare's KVNamespace we use.
+ *
+ * Declared structurally rather than pulling in `@cloudflare/workers-types`,
+ * which collides with `@types/node` over globals like fetch and Response. The
+ * real KVNamespace satisfies this, and tests can pass a plain in-memory stub.
+ */
+export interface KVStore {
+  get(key: string): Promise<string | null>;
+  put(key: string, value: string): Promise<void>;
+}
+
+/** Bindings and secrets configured in wrangler.toml / `wrangler secret put`. */
+export interface Env {
+  /** KV namespace holding the poll cursor. Bound in wrangler.toml. */
+  STATE: KVStore;
+  /** Fine-grained PAT with public read access. GraphQL rejects anonymous calls. */
+  GITHUB_TOKEN: string;
+  GOOGLE_CHAT_WEBHOOK_URL?: string;
+  /** "true" logs the payload instead of posting it. */
+  DRY_RUN?: string;
+  /** "always" posts an all-quiet card when a window produced nothing. */
+  HEARTBEAT_MODE?: string;
 }

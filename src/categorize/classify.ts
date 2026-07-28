@@ -37,7 +37,7 @@ export function classifyPR(
   pr: PullRequest,
   files: string[],
   rules: CategoryRule[],
-  opts: { truncated?: boolean; releasedIn?: string | null } = {},
+  opts: { truncated?: boolean } = {},
 ): ClassifiedPR {
   const categories = new Map<Category, CategoryHit>();
 
@@ -64,7 +64,6 @@ export function classifyPR(
     categories,
     totalFiles: files.length,
     truncated: opts.truncated ?? false,
-    releasedIn: opts.releasedIn ?? null,
   };
 }
 

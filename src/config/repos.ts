@@ -6,8 +6,22 @@ import { agUiRules, copilotKitRules } from "../categorize/rules.js";
  * is a reviewable one-line diff.
  */
 export const REPOS: RepoConfig[] = [
-  { owner: "CopilotKit", repo: "CopilotKit", rules: copilotKitRules },
-  { owner: "ag-ui-protocol", repo: "ag-ui", rules: agUiRules },
+  // CopilotKit tags name the package (`channels/v0.3.0`); its release bodies
+  // carry no package list.
+  {
+    owner: "CopilotKit",
+    repo: "CopilotKit",
+    rules: copilotKitRules,
+    releasePackageSource: "tag",
+  },
+  // ag-ui tags are repo-wide dates (`release/2026-07-28`); the published
+  // packages are listed in a table in the release body.
+  {
+    owner: "ag-ui-protocol",
+    repo: "ag-ui",
+    rules: agUiRules,
+    releasePackageSource: "body",
+  },
 ];
 
 /**

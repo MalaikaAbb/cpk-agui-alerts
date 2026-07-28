@@ -2,13 +2,14 @@ import { categoriesInReport, prsInCategory } from "../categorize/classify.js";
 import { MAX_PRS_PER_SECTION } from "../config/repos.js";
 import {
   CATEGORY_LABEL,
-  HIGHLIGHTED_CATEGORIES,
+  PR_DETAIL_CATEGORIES,
+  RELEASE_DRIVEN_CATEGORIES,
   type Category,
   type ClassifiedPR,
   type Report,
   type RepoReport,
 } from "../types.js";
-import { mergedSearchUrl, summarizeBody, truncateTitle } from "./buildReport.js";
+import { displayablePRs, mergedSearchUrl, summarizeBody, truncateTitle } from "./buildReport.js";
 
 /**
  * Google Chat cardsV2 payload.
@@ -50,10 +51,13 @@ export function buildChatMessage(report: Report): ChatMessage {
 
 function summaryLine(report: Report): string {
   const parts = report.repos.map((r) => {
-    const bits = [`${r.prs.length} PR${r.prs.length === 1 ? "" : "s"}`];
-    if (r.releases.length > 0) {
-      bits.push(`${r.releases.length} release${r.releases.length === 1 ? "" : "s"}`);
-    }
+    const packageCount = r.releases.reduce((sum, rel) => sum + rel.packages.length, 0);
+    const bits: string[] = [];
+    if (packageCount > 0) bits.push(`${packageCount} package${packageCount === 1 ? "" : "s"} released`);
+
+    const prCount = displayablePRs(r).length;
+    if (prCount > 0) bits.push(`${prCount} PR${prCount === 1 ? "" : "s"}`);
+
     return `${r.repo}: ${bits.join(", ")}`;
   });
 
@@ -63,27 +67,31 @@ function summaryLine(report: Report): string {
 function buildRepoCard(report: RepoReport): ChatCard {
   const sections: ChatSection[] = [];
 
-  const present = categoriesInReport(report.prs);
-  const highlighted = HIGHLIGHTED_CATEGORIES.filter((c) => present.includes(c));
-  const secondary = present.filter((c) => !HIGHLIGHTED_CATEGORIES.includes(c));
+  // Packages are announced by release, so this section comes from published
+  // releases rather than from merged PRs.
+  if (report.releases.length > 0) {
+    sections.push(buildPackageReleaseSection(report));
+  }
 
-  // Docs and Packages get full per-PR detail, listed first.
-  for (const category of highlighted) {
-    sections.push(buildDetailSection(category, report));
+  const shown = displayablePRs(report);
+  const present = categoriesInReport(shown).filter(
+    (c) => !RELEASE_DRIVEN_CATEGORIES.includes(c),
+  );
+  const detailed = PR_DETAIL_CATEGORIES.filter((c) => present.includes(c));
+  const secondary = present.filter((c) => !PR_DETAIL_CATEGORIES.includes(c));
+
+  for (const category of detailed) {
+    sections.push(buildDetailSection(category, report, shown));
   }
 
   // Everything else is a one-line count so it cannot crowd out the above.
   if (secondary.length > 0) {
-    sections.push(buildSecondarySection(secondary, report));
-  }
-
-  if (report.releases.length > 0) {
-    sections.push(buildReleaseSection(report));
+    sections.push(buildSecondarySection(secondary, report, shown));
   }
 
   if (sections.length === 0) {
     sections.push({
-      widgets: [{ textParagraph: { text: "<i>No merged pull requests in this window.</i>" } }],
+      widgets: [{ textParagraph: { text: "<i>No reportable changes in this window.</i>" } }],
     });
   }
 
@@ -97,21 +105,27 @@ function buildRepoCard(report: RepoReport): ChatCard {
 }
 
 function cardSubtitle(report: RepoReport): string {
-  const prCount = report.prs.length;
-  const releasedCount = report.prs.filter((p) => p.releasedIn !== null).length;
+  const packageCount = report.releases.reduce((sum, r) => sum + r.packages.length, 0);
+  const prCount = displayablePRs(report).length;
 
-  const bits = [`${prCount} merged PR${prCount === 1 ? "" : "s"}`];
-  if (releasedCount > 0) bits.push(`${releasedCount} released`);
-  if (report.releases.length > 0) {
-    bits.push(`${report.releases.length} new release${report.releases.length === 1 ? "" : "s"}`);
+  const bits: string[] = [];
+  if (packageCount > 0) {
+    bits.push(`${packageCount} package${packageCount === 1 ? "" : "s"} released`);
+  }
+  if (prCount > 0) {
+    bits.push(`${prCount} merged PR${prCount === 1 ? "" : "s"}`);
   }
   bits.push(`since ${formatTime(report.sinceISO)}`);
 
   return bits.join(" · ");
 }
 
-function buildDetailSection(category: Category, report: RepoReport): ChatSection {
-  const prs = prsInCategory(report.prs, category);
+function buildDetailSection(
+  category: Category,
+  report: RepoReport,
+  source: ClassifiedPR[],
+): ChatSection {
+  const prs = prsInCategory(source, category);
   const shown = prs.slice(0, MAX_PRS_PER_SECTION);
   const overflow = prs.length - shown.length;
 
@@ -137,9 +151,13 @@ function buildDetailSection(category: Category, report: RepoReport): ChatSection
  * One line per remaining category. These are deliberately terse — they exist for
  * awareness, not for review.
  */
-function buildSecondarySection(categories: Category[], report: RepoReport): ChatSection {
+function buildSecondarySection(
+  categories: Category[],
+  report: RepoReport,
+  source: ClassifiedPR[],
+): ChatSection {
   const lines = categories.map((category) => {
-    const prs = prsInCategory(report.prs, category);
+    const prs = prsInCategory(source, category);
     const files = prs.reduce((sum, p) => sum + (p.categories.get(category)?.count ?? 0), 0);
     return (
       `${CATEGORY_LABEL[category]}: ${prs.length} PR${prs.length === 1 ? "" : "s"} ` +
@@ -162,14 +180,36 @@ function buildSecondarySection(categories: Category[], report: RepoReport): Chat
   };
 }
 
-function buildReleaseSection(report: RepoReport): ChatSection {
-  const lines = report.releases.map((r) => {
-    const tag = r.isPrerelease ? `${escapeHtml(r.name)} <i>(prerelease)</i>` : escapeHtml(r.name);
-    return `🚀 <a href="${r.htmlUrl}"><b>${tag}</b></a> — ${formatTime(r.publishedAt)}`;
-  });
+/**
+ * The package section: which packages shipped, at which versions.
+ *
+ * No PRs here by design — a merged package PR is not usable by anyone until it
+ * is published, so this section answers "what can I install now?" rather than
+ * "what did people work on?".
+ */
+function buildPackageReleaseSection(report: RepoReport): ChatSection {
+  const lines: string[] = [];
+  let packageCount = 0;
+
+  for (const release of report.releases) {
+    const suffix = release.isPrerelease ? ' <i>(prerelease)</i>' : "";
+    lines.push(
+      `🚀 <a href="${release.htmlUrl}"><b>${escapeHtml(release.name)}</b></a>` +
+        `${suffix} — ${formatTime(release.publishedAt)}`,
+    );
+
+    for (const pkg of release.packages) {
+      packageCount++;
+      const ecosystem = pkg.ecosystem ? ` <font color="#5f6368">(${escapeHtml(pkg.ecosystem)})</font>` : "";
+      lines.push(
+        `&nbsp;&nbsp;&nbsp;&nbsp;📦 <b>${escapeHtml(pkg.name)}</b> ` +
+          `<code>${escapeHtml(pkg.version)}</code>${ecosystem}`,
+      );
+    }
+  }
 
   return {
-    header: `<b>Releases published</b> — ${report.releases.length}`,
+    header: `<b>${CATEGORY_LABEL.Packages} released</b> — ${packageCount || report.releases.length}`,
     widgets: [{ textParagraph: { text: lines.join("<br>") } }],
   };
 }
@@ -182,17 +222,12 @@ function renderPR(classified: ClassifiedPR, category: Category): string {
   const { pr } = classified;
   const hit = classified.categories.get(category);
 
-  const tags: string[] = ["<b>MERGED</b>"];
-  if (classified.releasedIn) {
-    tags.push(`<b>RELEASED ${escapeHtml(classified.releasedIn)}</b>`);
-  }
-
   const parts: string[] = [
     `<a href="${pr.htmlUrl}"><b>#${pr.number}</b></a> ${escapeHtml(truncateTitle(pr.title))}`,
   ];
 
   const meta: string[] = [
-    tags.join(" · "),
+    "<b>MERGED</b>",
     `@${escapeHtml(pr.author)}${pr.isBot ? " [bot]" : ""}`,
   ];
   if (hit) {

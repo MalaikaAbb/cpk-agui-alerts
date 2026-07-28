@@ -13,7 +13,6 @@ function fakePR(overrides: Partial<PullRequest> = {}): PullRequest {
     author: "someone",
     isBot: false,
     mergedAt: "2026-07-28T12:00:00Z",
-    mergeCommitSha: "abc123",
     ...overrides,
   };
 }
@@ -140,13 +139,11 @@ describe("classifyPR", () => {
     assert.equal(classified.categories.size, 0);
   });
 
-  test("release attribution is carried through", () => {
+  test("a truncated file list is flagged", () => {
     const classified = classifyPR(fakePR(), ["packages/core/a.ts"], copilotKitRules, {
-      releasedIn: "v1.2.3",
       truncated: true,
     });
 
-    assert.equal(classified.releasedIn, "v1.2.3");
     assert.equal(classified.truncated, true);
   });
 });

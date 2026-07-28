@@ -1,7 +1,9 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { mergedSearchUrl, summarizeBody, truncateTitle } from "./buildReport.js";
-import type { RepoReport } from "../types.js";
+import { displayablePRs, isEmpty, mergedSearchUrl, summarizeBody, truncateTitle } from "./buildReport.js";
+import { classifyPR } from "../categorize/classify.js";
+import { copilotKitRules } from "../categorize/rules.js";
+import type { ClassifiedPR, Release, RepoReport } from "../types.js";
 
 describe("summarizeBody", () => {
   test("returns null for empty or missing bodies", () => {
@@ -48,6 +50,105 @@ describe("truncateTitle", () => {
     const result = truncateTitle("y".repeat(120));
     assert.equal(result.length, 80);
     assert.ok(result.endsWith("…"));
+  });
+});
+
+function prWith(files: string[], number = 1): ClassifiedPR {
+  return classifyPR(
+    {
+      number,
+      title: "t",
+      body: null,
+      htmlUrl: "https://github.com/o/r/pull/1",
+      author: "a",
+      isBot: false,
+      mergedAt: "2026-07-28T12:00:00Z",
+    },
+    files,
+    copilotKitRules,
+  );
+}
+
+function reportWith(prs: ClassifiedPR[], releases: Release[] = []): RepoReport {
+  return {
+    key: "CopilotKit/CopilotKit",
+    owner: "CopilotKit",
+    repo: "CopilotKit",
+    sinceISO: "2026-07-28T06:00:00.000Z",
+    untilISO: "2026-07-28T12:00:00.000Z",
+    prs,
+    releases,
+  };
+}
+
+const aRelease: Release = {
+  id: 1,
+  name: "channels/v0.3.0",
+  tagName: "channels/v0.3.0",
+  htmlUrl: "https://github.com/o/r/releases/tag/channels/v0.3.0",
+  publishedAt: "2026-07-28T10:00:00.000Z",
+  isPrerelease: false,
+  body: "Release channels/v0.3.0",
+  packages: [{ name: "channels", version: "0.3.0" }],
+};
+
+describe("isEmpty — only docs changes and package releases notify", () => {
+  test("a docs PR triggers a notification", () => {
+    assert.equal(isEmpty(reportWith([prWith(["showcase/shell-docs/src/content/a.mdx"])])), false);
+  });
+
+  test("a package release triggers a notification", () => {
+    assert.equal(isEmpty(reportWith([], [aRelease])), false);
+  });
+
+  test("package PRs with no release stay silent", () => {
+    assert.equal(isEmpty(reportWith([prWith(["packages/react-ui/src/a.ts"])])), true);
+  });
+
+  test("showcase-only activity stays silent", () => {
+    assert.equal(isEmpty(reportWith([prWith(["showcase/aimock/d6/x.json"])])), true);
+  });
+
+  test("examples and internal activity stays silent", () => {
+    assert.equal(
+      isEmpty(reportWith([prWith(["examples/canvas/a.tsx"], 1), prWith(["dev-docs/x.md"], 2)])),
+      true,
+    );
+  });
+
+  test("a totally empty window stays silent", () => {
+    assert.equal(isEmpty(reportWith([])), true);
+  });
+
+  // Docs riding along inside a bigger change still counts as a docs change.
+  test("a mixed PR touching docs triggers a notification", () => {
+    assert.equal(
+      isEmpty(
+        reportWith([
+          prWith(["packages/core/a.ts", "showcase/aimock/b.json", "showcase/shell-docs/c.mdx"]),
+        ]),
+      ),
+      false,
+    );
+  });
+});
+
+describe("displayablePRs", () => {
+  test("package-only PRs are never rendered", () => {
+    const report = reportWith([
+      prWith(["packages/react-ui/src/a.ts"], 1),
+      prWith(["showcase/shell-docs/src/content/b.mdx"], 2),
+    ]);
+
+    assert.deepEqual(
+      displayablePRs(report).map((p) => p.pr.number),
+      [2],
+    );
+  });
+
+  test("a PR touching packages and docs is still rendered", () => {
+    const report = reportWith([prWith(["packages/core/a.ts", "showcase/shell-docs/b.mdx"], 7)]);
+    assert.equal(displayablePRs(report).length, 1);
   });
 });
 

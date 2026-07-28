@@ -1,0 +1,27 @@
+name = "cpk-agui-alert"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+# Every 3 hours on the hour, UTC: 00:00, 03:00, 06:00, ... 21:00.
+# Cloudflare Cron Triggers are always UTC, like GitHub Actions.
+[triggers]
+crons = ["0 */3 * * *"]
+
+# Holds the poll cursor between runs. Create with:
+#   wrangler kv namespace create STATE
+# then paste the printed id below.
+[[kv_namespaces]]
+binding = "STATE"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+[vars]
+DRY_RUN = "false"
+# Set to "always" to get an all-quiet card when a window produced nothing.
+HEARTBEAT_MODE = "skip"
+
+# Secrets are NOT set here — they would end up in git. Set them with:
+#   wrangler secret put GITHUB_TOKEN
+#   wrangler secret put GOOGLE_CHAT_WEBHOOK_URL
+
+[observability]
+enabled = true

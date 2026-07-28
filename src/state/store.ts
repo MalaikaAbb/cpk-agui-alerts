@@ -1,44 +1,45 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
 import { DEDUP_RETENTION_DAYS, DEFAULT_LOOKBACK_HOURS } from "../config/repos.js";
-import type { RepoKey, RepoState, State } from "../types.js";
+import type { KVStore, RepoKey, RepoState, State } from "../types.js";
 
 const SCHEMA_VERSION = 1;
 
-/** Repo-root-relative so it works the same locally and on an Actions runner. */
-export const STATE_PATH = resolve(process.cwd(), "state/state.json");
+/** Single KV key holding the whole cursor document — it is a few KB at most. */
+export const STATE_KEY = "poll-state";
 
 export function emptyState(): State {
   return { schemaVersion: SCHEMA_VERSION, repos: {} };
 }
 
-export async function loadState(path = STATE_PATH): Promise<State> {
+export async function loadState(kv: KVStore): Promise<State> {
+  let raw: string | null;
   try {
-    const raw = await readFile(path, "utf8");
-    const parsed = JSON.parse(raw) as State;
+    raw = await kv.get(STATE_KEY);
+  } catch (err) {
+    // A KV read failure should not wedge the poller; fall back to a fresh cursor.
+    console.warn("[state] KV read failed, starting fresh:", err instanceof Error ? err.message : err);
+    return emptyState();
+  }
 
+  if (raw === null) {
+    console.log("[state] no stored state yet, bootstrapping");
+    return emptyState();
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as State;
     if (parsed.schemaVersion !== SCHEMA_VERSION) {
-      console.warn(
-        `[state] schema version ${parsed.schemaVersion} != ${SCHEMA_VERSION}, starting fresh`,
-      );
+      console.warn(`[state] schema ${parsed.schemaVersion} != ${SCHEMA_VERSION}, starting fresh`);
       return emptyState();
     }
     return { schemaVersion: parsed.schemaVersion, repos: parsed.repos ?? {} };
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") {
-      console.log("[state] no state file yet, bootstrapping");
-      return emptyState();
-    }
-    // A corrupt state file should not wedge the poller forever.
-    console.warn("[state] unreadable, starting fresh:", err instanceof Error ? err.message : err);
+    console.warn("[state] unparseable, starting fresh:", err instanceof Error ? err.message : err);
     return emptyState();
   }
 }
 
-export async function saveState(state: State, path = STATE_PATH): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+export async function saveState(kv: KVStore, state: State): Promise<void> {
+  await kv.put(STATE_KEY, JSON.stringify(state));
 }
 
 /**
@@ -63,7 +64,7 @@ export function getRepoState(state: State, key: RepoKey, nowISO: string): RepoSt
  *
  * The dedup set guards against the timestamp boundary: a PR merged in the same
  * second the previous run started could otherwise be picked up twice. Entries age
- * out after DEDUP_RETENTION_DAYS so the file stays small.
+ * out after DEDUP_RETENTION_DAYS so the document stays small.
  */
 export function updateRepoState(
   state: State,

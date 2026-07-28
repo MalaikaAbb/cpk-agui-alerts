@@ -11,7 +11,22 @@
       "Bash(DRY_RUN=true node dist/index.js)",
       "Bash(node -e ' *)",
       "Bash(node -e 'fetch\\(\"https://api.github.com/rate_limit\",{headers:{\"User-Agent\":\"x\"}}\\).then\\(r=>r.json\\(\\)\\).then\\(j=>{const c=j.resources.core; console.log\\(`remaining ${c.remaining}/${c.limit}, resets at ${new Date\\(c.reset*1000\\).toISOString\\(\\)}`\\)}\\).catch\\(e=>console.log\\(\"n/a\"\\)\\)')",
-      "Bash(node -e 'fetch\\(\"https://api.github.com/rate_limit\",{headers:{\"User-Agent\":\"x\"}}\\).then\\(r=>r.json\\(\\)\\).then\\(j=>console.log\\(j.resources.core.remaining+\"/\"+j.resources.core.limit\\)\\).catch\\(\\(\\)=>console.log\\(\"n/a\"\\)\\)')"
+      "Bash(node -e 'fetch\\(\"https://api.github.com/rate_limit\",{headers:{\"User-Agent\":\"x\"}}\\).then\\(r=>r.json\\(\\)\\).then\\(j=>console.log\\(j.resources.core.remaining+\"/\"+j.resources.core.limit\\)\\).catch\\(\\(\\)=>console.log\\(\"n/a\"\\)\\)')",
+      "Bash(node -e 'fetch\\(\"https://api.github.com/rate_limit\",{headers:{\"User-Agent\":\"x\"}}\\).then\\(r=>r.json\\(\\)\\).then\\(j=>console.log\\(j.resources.core.remaining+\"/\"+j.resources.core.limit\\)\\)')",
+      "Bash(tee /tmp/claude-1000/-home-malaika-fiqros-copilotkit-cpk-agui-alert/470976df-fa14-409c-8d7c-6f2fd0346ef9/scratchpad/verify-run.json)",
+      "Bash(grep -oE '#[0-9]+.{0,200}')",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(node -e 'fetch\\(\"https://api.github.com/rate_limit\",{headers:{\"User-Agent\":\"x\"}}\\).then\\(r=>r.json\\(\\)\\).then\\(j=>{const c=j.resources.core;console.log\\(c.remaining+\"/\"+c.limit+\" resets \"+new Date\\(c.reset*1000\\).toISOString\\(\\)\\)}\\)')",
+      "Bash(node /tmp/claude-1000/-home-malaika-fiqros-copilotkit-cpk-agui-alert/470976df-fa14-409c-8d7c-6f2fd0346ef9/scratchpad/render-check.mjs)",
+      "Bash(sed -i 's#\\\\.\\\\./\\\\.\\\\./\\\\.\\\\./\\\\.\\\\./home/malaika-fiqros#/home/malaika-fiqros#g' render-check.mjs)",
+      "Bash(node render-check.mjs)",
+      "Bash(node /tmp/claude-1000/-home-malaika-fiqros-copilotkit-cpk-agui-alert/470976df-fa14-409c-8d7c-6f2fd0346ef9/scratchpad/gate-check.mjs)",
+      "Bash(python3 -)",
+      "Bash(env)",
+      "Bash(DRY_RUN=true node dist/dev/dry-run.js 1)",
+      "Bash(npx wrangler *)",
+      "Bash(chmod 600 .dev.vars)",
+      "Bash(git check-ignore *)"
     ]
   }
 }

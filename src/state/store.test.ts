@@ -1,10 +1,84 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { emptyState, getRepoState, updateRepoState } from "./store.js";
+import {
+  emptyState,
+  getRepoState,
+  loadState,
+  saveState,
+  STATE_KEY,
+  updateRepoState,
+} from "./store.js";
 import { DEFAULT_LOOKBACK_HOURS } from "../config/repos.js";
+import type { KVStore } from "../types.js";
 
 const KEY = "CopilotKit/CopilotKit";
 const NOW = "2026-07-28T12:00:00.000Z";
+
+/** In-memory stand-in for Workers KV. */
+function fakeKV(initial: string | null = null): KVStore & { value: string | null } {
+  return {
+    value: initial,
+    async get() {
+      return this.value;
+    },
+    async put(_key: string, value: string) {
+      this.value = value;
+    },
+  };
+}
+
+describe("loadState", () => {
+  test("bootstraps when KV has nothing stored", async () => {
+    assert.deepEqual(await loadState(fakeKV()), emptyState());
+  });
+
+  test("round-trips a saved state", async () => {
+    const kv = fakeKV();
+    const state = emptyState();
+    updateRepoState(state, KEY, { nowISO: NOW, reportedPRs: [], reportedReleaseIds: [7] });
+
+    await saveState(kv, state);
+    const loaded = await loadState(kv);
+
+    assert.equal(loaded.repos[KEY]?.lastCheckedISO, NOW);
+    assert.deepEqual(loaded.repos[KEY]?.reportedReleaseIds, [7]);
+  });
+
+  test("starts fresh rather than throwing on corrupt data", async () => {
+    assert.deepEqual(await loadState(fakeKV("{not json")), emptyState());
+  });
+
+  test("starts fresh on a schema version it does not understand", async () => {
+    const stored = JSON.stringify({ schemaVersion: 99, repos: { x: {} } });
+    assert.deepEqual(await loadState(fakeKV(stored)), emptyState());
+  });
+
+  test("survives a KV read failure", async () => {
+    const kv: KVStore = {
+      async get() {
+        throw new Error("KV unavailable");
+      },
+      async put() {},
+    };
+
+    assert.deepEqual(await loadState(kv), emptyState());
+  });
+
+  test("writes under the expected key", async () => {
+    const seen: string[] = [];
+    const kv: KVStore = {
+      async get() {
+        return null;
+      },
+      async put(key: string) {
+        seen.push(key);
+      },
+    };
+
+    await saveState(kv, emptyState());
+    assert.deepEqual(seen, [STATE_KEY]);
+  });
+});
 
 describe("getRepoState", () => {
   test("first run looks back exactly one poll interval", () => {
@@ -71,7 +145,6 @@ describe("updateRepoState", () => {
       reportedPRs: [1, 2],
       reportedReleaseIds: [],
       reportedPRDates: {
-        // Well outside the 30-day retention window.
         "1": "2026-01-01T00:00:00.000Z",
         "2": "2026-07-20T00:00:00.000Z",
       },

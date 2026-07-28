@@ -3,17 +3,18 @@ import { buildRepoReport, isEmpty } from "./report/buildReport.js";
 import { buildChatMessage } from "./report/chatCard.js";
 import { sendToGoogleChat } from "./report/send.js";
 import { getRepoState, loadState, saveState, updateRepoState } from "./state/store.js";
-import type { Report, RepoReport } from "./types.js";
+import type { Env, Report, RepoReport } from "./types.js";
 
 /**
  * One poll cycle: read the cursor, collect what landed in each repo since then,
- * notify if there is anything, and advance the cursor.
+ * notify if a docs change or package release earned it, and advance the cursor.
+ *
+ * Exported separately from the Worker handlers so both `scheduled` (cron) and
+ * `fetch` (manual trigger) run exactly the same path.
  */
-async function main(): Promise<void> {
-  const dryRun = process.env.DRY_RUN === "true";
-  const webhookUrl = process.env.GOOGLE_CHAT_WEBHOOK_URL;
-  // Sent when nothing changed. Off by default to keep the Space quiet.
-  const heartbeat = process.env.HEARTBEAT_MODE === "always";
+export async function runPoll(env: Env): Promise<{ sent: boolean; summary: string }> {
+  const dryRun = env.DRY_RUN === "true";
+  const heartbeat = env.HEARTBEAT_MODE === "always";
 
   // Captured once up front: using run-start (not run-end) as the next cursor
   // means anything merged while we are polling is caught next time, not skipped.
@@ -21,7 +22,7 @@ async function main(): Promise<void> {
 
   console.log(`[run] starting at ${nowISO}${dryRun ? " (dry run)" : ""}`);
 
-  const state = await loadState();
+  const state = await loadState(env.STATE);
   const repoReports: RepoReport[] = [];
   const failures: string[] = [];
 
@@ -30,7 +31,7 @@ async function main(): Promise<void> {
     const repoState = getRepoState(state, key, nowISO);
 
     try {
-      const report = await buildRepoReport(config, repoState, nowISO);
+      const report = await buildRepoReport(config, repoState, nowISO, env.GITHUB_TOKEN);
       repoReports.push(report);
 
       updateRepoState(state, key, {
@@ -48,32 +49,41 @@ async function main(): Promise<void> {
   }
 
   const withActivity = repoReports.filter((r) => !isEmpty(r));
+  let sent = false;
 
   if (withActivity.length === 0) {
-    console.log("[run] no merged PRs or releases in this window");
+    console.log("[run] no docs changes or package releases in this window");
     if (heartbeat) {
-      await sendHeartbeat(repoReports, nowISO, { dryRun, webhookUrl });
+      await sendHeartbeat(repoReports, nowISO, { dryRun, webhookUrl: env.GOOGLE_CHAT_WEBHOOK_URL });
     }
   } else {
     const report: Report = { generatedAtISO: nowISO, repos: withActivity };
-    const message = buildChatMessage(report);
-    await sendToGoogleChat(message, { dryRun, webhookUrl });
+    const result = await sendToGoogleChat(buildChatMessage(report), {
+      dryRun,
+      webhookUrl: env.GOOGLE_CHAT_WEBHOOK_URL,
+    });
+    sent = result.sent;
   }
 
-  // A dry run must leave no trace: advancing the cursor here would mark these PRs
-  // as reported and they would never appear in a real notification.
+  // A dry run must leave no trace: advancing the cursor would mark these PRs as
+  // reported and they would never appear in a real notification.
   if (dryRun) {
     console.log("[run] dry run — cursor left unchanged");
   } else {
     // Persist even on a quiet run so the window keeps moving forward. Repos that
     // threw were never updated above, so they retry from their old cursor.
-    await saveState(state);
+    await saveState(env.STATE, state);
     console.log("[run] state saved");
   }
 
   if (failures.length > 0) {
     throw new Error(`${failures.length} repo(s) failed:\n${failures.join("\n")}`);
   }
+
+  return {
+    sent,
+    summary: withActivity.length === 0 ? "no reportable changes" : `reported ${withActivity.length} repo(s)`,
+  };
 }
 
 async function sendHeartbeat(
@@ -85,7 +95,7 @@ async function sendHeartbeat(
 
   await sendToGoogleChat(
     {
-      text: "No new merged PRs or releases in the last poll window.",
+      text: "No docs changes or package releases in the last poll window.",
       cardsV2: [
         {
           cardId: "heartbeat",
@@ -96,7 +106,9 @@ async function sendHeartbeat(
             },
             sections: [
               {
-                widgets: [{ textParagraph: { text: "<i>Nothing merged or released.</i>" } }],
+                widgets: [
+                  { textParagraph: { text: "<i>Nothing merged to docs, nothing released.</i>" } },
+                ],
               },
             ],
           },
@@ -107,7 +119,30 @@ async function sendHeartbeat(
   );
 }
 
-main().catch((err) => {
-  console.error("[run] fatal:", err instanceof Error ? (err.stack ?? err.message) : err);
-  process.exitCode = 1;
-});
+export default {
+  /** Cron Trigger entrypoint — schedule lives in wrangler.toml. */
+  async scheduled(_event: unknown, env: Env, ctx: { waitUntil(p: Promise<unknown>): void }) {
+    ctx.waitUntil(
+      runPoll(env).catch((err) => {
+        console.error("[run] fatal:", err instanceof Error ? (err.stack ?? err.message) : err);
+      }),
+    );
+  },
+
+  /**
+   * Manual trigger, the equivalent of workflow_dispatch. Append `?dry=1` to log
+   * the payload without posting or advancing the cursor.
+   */
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const dry = new URL(request.url).searchParams.get("dry") === "1";
+
+    try {
+      const result = await runPoll(dry ? { ...env, DRY_RUN: "true" } : env);
+      return new Response(`ok — ${result.summary}${dry ? " (dry run)" : ""}\n`);
+    } catch (err) {
+      const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
+      console.error("[run] fatal:", message);
+      return new Response(`error\n${message}\n`, { status: 500 });
+    }
+  },
+};

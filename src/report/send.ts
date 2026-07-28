@@ -19,7 +19,8 @@ export async function sendToGoogleChat(
   opts: { dryRun: boolean; webhookUrl?: string },
 ): Promise<SendResult> {
   const payload = JSON.stringify(message);
-  const bytes = Buffer.byteLength(payload, "utf8");
+  // TextEncoder rather than Buffer — Workers has no Node Buffer global.
+  const bytes = new TextEncoder().encode(payload).length;
 
   if (bytes > MAX_PAYLOAD_BYTES) {
     // Section caps make this unlikely; log loudly rather than fail the run.

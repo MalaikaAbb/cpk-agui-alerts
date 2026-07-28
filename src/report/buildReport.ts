@@ -1,56 +1,49 @@
 import { classifyPR } from "../categorize/classify.js";
 import { repoKey } from "../config/repos.js";
-import { getDefaultBranch, listMergedPullsSince, listPullFiles } from "../github/pulls.js";
-import { listReleasesSince, resolveReleasedPRs } from "../github/releases.js";
+import { fetchMergedPulls, fetchReleasesSince } from "../github/graphql.js";
+import { NOTIFY_TRIGGER_CATEGORIES, RELEASE_DRIVEN_CATEGORIES } from "../types.js";
 import type { ClassifiedPR, RepoConfig, RepoReport, RepoState } from "../types.js";
 
 /**
  * Collect and classify everything that landed in one repo since its cursor.
  *
- * Returns the report plus the ids we consumed, so the caller can advance state
- * even when it decides not to send a notification.
+ * Two GraphQL requests per repo — PRs (with their files inline) and releases —
+ * regardless of how much merged in the window.
  */
 export async function buildRepoReport(
   config: RepoConfig,
   repoState: RepoState,
   nowISO: string,
+  token: string,
 ): Promise<RepoReport> {
   const { owner, repo } = config;
   const key = repoKey(owner, repo);
   const since = repoState.lastCheckedISO;
 
-  const defaultBranch = await getDefaultBranch(owner, repo);
-  const merged = await listMergedPullsSince(owner, repo, defaultBranch, since);
+  const merged = await fetchMergedPulls(owner, repo, since, token);
 
   // Dedup safety net for PRs that straddle the window boundary.
   const alreadyReported = new Set(repoState.reportedPRs);
-  const fresh = merged.filter((pr) => !alreadyReported.has(pr.number));
+  const fresh = merged.filter((m) => !alreadyReported.has(m.pr.number));
 
   console.log(
     `[${key}] ${merged.length} merged since ${since}` +
       (merged.length !== fresh.length ? ` (${merged.length - fresh.length} already reported)` : ""),
   );
 
-  // Files come first: release attribution needs them to tell whether a PR
-  // actually belongs to a package-scoped release.
-  const withFiles: Array<{ pr: (typeof fresh)[number]; files: string[]; truncated: boolean }> = [];
-  for (const pr of fresh) {
-    const { files, truncated } = await listPullFiles(owner, repo, pr.number);
-    withFiles.push({ pr, files, truncated });
-  }
+  const classified: ClassifiedPR[] = fresh.map(({ pr, files, truncated }) =>
+    classifyPR(pr, files, config.rules, { truncated }),
+  );
 
-  const { newReleases, all } = await listReleasesSince(owner, repo, since);
+  const newReleases = await fetchReleasesSince(
+    owner,
+    repo,
+    since,
+    token,
+    config.releasePackageSource,
+  );
   const seenReleases = new Set(repoState.reportedReleaseIds);
   const freshReleases = newReleases.filter((r) => !seenReleases.has(r.id));
-
-  const releasedMap = await resolveReleasedPRs(owner, repo, newReleases, all, withFiles);
-
-  const classified: ClassifiedPR[] = withFiles.map(({ pr, files, truncated }) =>
-    classifyPR(pr, files, config.rules, {
-      truncated,
-      releasedIn: releasedMap.get(pr.number) ?? null,
-    }),
-  );
 
   return {
     key,
@@ -63,9 +56,33 @@ export async function buildRepoReport(
   };
 }
 
-/** True when there is nothing worth notifying about. */
+/**
+ * PRs the report will actually show.
+ *
+ * A PR that only touched package code is excluded: package work is announced by
+ * its release, not by its merge. Such a PR still resolves into the report data,
+ * it just has nothing to render until a release ships it.
+ */
+export function displayablePRs(report: RepoReport): ClassifiedPR[] {
+  return report.prs.filter((p) =>
+    [...p.categories.keys()].some((c) => !RELEASE_DRIVEN_CATEGORIES.includes(c)),
+  );
+}
+
+/**
+ * True when there is nothing worth notifying about.
+ *
+ * Only two things earn a notification: a docs change, or a package release.
+ * A window containing nothing but showcase, example, internal, or unreleased
+ * package work stays completely silent — those appear only as context on a
+ * notification that a docs change or release already earned.
+ */
 export function isEmpty(report: RepoReport): boolean {
-  return report.prs.length === 0 && report.releases.length === 0;
+  if (report.releases.length > 0) return false;
+
+  return !report.prs.some((p) =>
+    [...p.categories.keys()].some((c) => NOTIFY_TRIGGER_CATEGORIES.includes(c)),
+  );
 }
 
 /**

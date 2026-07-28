@@ -1,26 +1,65 @@
 # cpk-agui-alert
 
-Polls [CopilotKit/CopilotKit](https://github.com/CopilotKit/CopilotKit) and
-[ag-ui-protocol/ag-ui](https://github.com/ag-ui-protocol/ag-ui) every 3 hours and posts a
+A Cloudflare Worker that polls [CopilotKit/CopilotKit](https://github.com/CopilotKit/CopilotKit)
+and [ag-ui-protocol/ag-ui](https://github.com/ag-ui-protocol/ag-ui) every 3 hours and posts a
 categorized change report to a Google Chat Space.
 
-Docs and package changes are reported in full detail and listed first; demo, example, and
-internal changes are collapsed to a one-line count so they cannot crowd out the things that
-matter.
+Docs and package changes are the two things reported prominently; demo, example, and internal
+changes are collapsed to a one-line count so they cannot crowd out the things that matter.
+
+## When a notification is sent
+
+Only two things earn a notification:
+
+1. a **docs change** merged, or
+2. a **package release** published.
+
+Anything else — showcase, examples, internal, or package PRs that have not been released — is
+**silent**. Those still appear as context on a notification that a docs change or release
+already earned, but they never trigger one on their own. A window with nothing but showcase
+churn produces no message at all.
+
+| Window contains | Result |
+| --- | --- |
+| Nothing | silent |
+| Package PRs merged, no release | silent |
+| Showcase / examples / internal only | silent |
+| A docs PR | **sent** |
+| A package release | **sent** |
+
+To change what counts as a trigger, edit `NOTIFY_TRIGGER_CATEGORIES` in
+[`src/types.ts`](src/types.ts).
 
 ## What a report contains
 
 Per repo, one card:
 
-- **📚 Docs** and **📦 Packages** — every PR listed with its number, title, a one-line excerpt
-  of the PR description, author, `MERGED` / `RELEASED <tag>` status, and how many files it
-  changed in that area. Capped at 8 per section, with a "+N more" link to the exact GitHub
-  search for the window.
+- **📦 Packages released** — driven by **releases, not merges**. Lists the package names and
+  versions that were actually published, with the registry where known. No PRs are listed
+  here: a merged package PR is not installable by anyone, so package work stays silent until
+  a release makes it real.
+- **📚 Docs** — driven by merges, since docs deploy from `main` rather than being versioned.
+  Every PR listed with its number, title, a one-line excerpt of the PR description, author,
+  and how many files it changed in that area. Capped at 8, with a "+N more" link to the exact
+  GitHub search for the window.
 - **Other areas** — 🧪 Showcase/Demo, 💡 Examples, 🔧 Internal as counts only.
-- **Releases published** — any new GitHub Release in the window.
 
 A PR that spans several areas appears under each area it touched, so a small docs change riding
-along with a large refactor still shows up under Docs.
+along with a large refactor still shows up under Docs. A PR that touched **only** package code
+is not shown at all — it will be represented by its release when one ships.
+
+### How package names are resolved
+
+The two repos record published packages differently, so the strategy is per-repo
+(`releasePackageSource` in [`src/config/repos.ts`](src/config/repos.ts)):
+
+| Repo | Source | Example |
+| --- | --- | --- |
+| CopilotKit | `tag` — the tag names the package | `channels/v0.3.0` → **channels 0.3.0**; repo-wide `v1.63.2` → **CopilotKit 1.63.2** |
+| ag-ui | `body` — a "Packages Published" table in the release notes, since tags are repo-wide dates | `release/2026-07-28` → **ag-ui-crewai 0.2.1 (PyPI)** |
+
+If an ag-ui release body ever drops that table, it falls back to the tag so the release still
+gets reported rather than vanishing.
 
 ## Categorization
 
@@ -44,54 +83,95 @@ Two things worth knowing about these repos:
 - `showcase/shell-docs/src/content/ag-ui/` is a downstream mirror of the ag-ui protocol docs,
   whose canonical source is the ag-ui repo. Changes there are flagged with a warning note.
 
-## MERGED vs RELEASED
+## Why packages are release-driven
 
-- **MERGED** — the PR landed on the default branch inside the polling window.
-- **RELEASED `<tag>`** — its merge commit is additionally confirmed inside a published GitHub
-  Release.
+An earlier version tried to label each merged PR with the release that shipped it. That does not
+work on these repos: every package shares one `main` branch, so a tag-to-tag commit range
+contains everything merged in that window regardless of package — it would label a `react-ui`
+fix as shipped in `channels/v0.3.0` purely because it merged in between.
 
-CopilotKit publishes per-package tags (`channels/v0.3.0`, `angular/v0.3.0`) alongside repo-wide
-ones (`v1.63.2`), and every package shares one main branch. That means a tag-to-tag commit range
-contains everything merged in that window regardless of package — so containment alone would
-label a `react-ui` fix as shipped in `channels/v0.3.0`. For a package-scoped tag we additionally
-require that the PR actually touched that package. ag-ui's date-style tags
-(`release/2026-07-22`) are repo-wide and need no such filter.
+Reporting packages straight from the release (name + version, no PR correlation) sidesteps the
+problem entirely and answers the more useful question anyway: **what can I install right now?**
+
+The tradeoff to be aware of: package work is invisible between releases. If you need to see
+package PRs as they merge, remove `"Packages"` from `RELEASE_DRIVEN_CATEGORIES` in
+[`src/types.ts`](src/types.ts) and add it to `PR_DETAIL_CATEGORIES`.
 
 ## Setup
 
-1. Push this repo to GitHub.
-2. Add the Google Chat incoming webhook URL as a repository secret named
-   **`GOOGLE_CHAT_WEBHOOK_URL`** (Settings → Secrets and variables → Actions).
-   `GITHUB_TOKEN` is provided automatically by Actions — no PAT needed, since both watched
-   repos are public.
-3. Run the workflow once manually with **`dry_run: true`** (Actions → Poll and Report → Run
-   workflow) and check the logged payload before letting it post for real.
+Prerequisites: a Cloudflare account (free plan is enough) and `npm install`.
 
-After that the `schedule` trigger takes over every 3 hours (00:00 / 03:00 / 06:00 / … UTC).
+**1. Create the KV namespace** that holds the poll cursor:
 
-To change the cadence, update the `cron` in
-[`.github/workflows/poll-and-report.yml`](.github/workflows/poll-and-report.yml) and keep
-`DEFAULT_LOOKBACK_HOURS` in [`src/config/repos.ts`](src/config/repos.ts) in step with it.
+```bash
+npx wrangler kv namespace create STATE
+```
+
+Paste the printed `id` into `wrangler.toml`, replacing `REPLACE_WITH_KV_NAMESPACE_ID`.
+
+**2. Create a GitHub token.** Unlike GitHub Actions, Cloudflare has no automatic token, and
+the GraphQL API rejects anonymous requests entirely. A **fine-grained PAT** with *Public
+repositories (read-only)* access is sufficient — no write scopes, no org access.
+
+**3. Set both secrets** (these never go in `wrangler.toml`, which is committed):
+
+```bash
+npx wrangler secret put GITHUB_TOKEN
+npx wrangler secret put GOOGLE_CHAT_WEBHOOK_URL
+```
+
+**4. Verify before deploying** — hits the real GitHub API, posts nothing:
+
+```bash
+GITHUB_TOKEN=github_pat_xxx npm run dry-run 24    # look back 24h
+```
+
+**5. Deploy:**
+
+```bash
+npx wrangler deploy
+```
+
+The cron in `wrangler.toml` takes over from there. Watch it live with `npx wrangler tail`.
+
+## Triggering a run manually
+
+The Worker also exposes an HTTP endpoint, the equivalent of `workflow_dispatch`:
+
+```bash
+curl https://cpk-agui-alert.<your-subdomain>.workers.dev/         # real run
+curl https://cpk-agui-alert.<your-subdomain>.workers.dev/?dry=1   # dry run
+```
+
+`?dry=1` logs the payload without posting to Chat and without advancing the cursor, so you can
+run it as often as you like.
 
 ## Local development
 
 ```bash
 npm install
-npm test            # 63 unit tests, no network
+npm test                                  # 96 unit tests, no network
 npm run typecheck
+npx wrangler dev                          # run the Worker locally
 
-# Dry run against the live repos — prints the exact Chat payload, posts nothing.
-# A token is strongly recommended: unauthenticated GitHub allows only 60 requests/hour,
-# which one full run can exhaust.
-GITHUB_TOKEN=ghp_xxx npm run dry-run
+# Real GitHub calls, prints the Chat payload, posts nothing, writes nothing.
+GITHUB_TOKEN=github_pat_xxx npm run dry-run [hoursBack]
 ```
 
-To check a wider window locally, edit `lastCheckedISO` in `state/state.json` before running.
+## Why GraphQL
+
+The REST version needed one `pulls/{n}/files` request per merged PR. A busy window hit 27 PRs
+on CopilotKit alone, which would blow through Cloudflare's **50-subrequest-per-invocation**
+limit on the free plan — and it would have failed only under load, not in testing.
+
+The GraphQL query returns each PR's changed files inline, so a run costs **2 requests per repo**
+(pulls + releases) no matter how much merged. That keeps it comfortably inside the free tier
+permanently, and made local dry runs practical too.
 
 ## State
 
-`state/state.json` holds each repo's cursor and is committed back by the workflow after every
-run, since Actions runners keep no disk between runs.
+The poll cursor lives in a single Workers KV key (`poll-state`), replacing the JSON file the
+GitHub Actions version had to commit back to git on every run.
 
 - `lastCheckedISO` is captured at run *start*, so anything merged mid-run is picked up next
   time rather than skipped.
@@ -101,15 +181,29 @@ run, since Actions runners keep no disk between runs.
   the whole backlog.
 - A run where one repo's API calls fail leaves that repo's cursor untouched, so its window is
   retried on the next run rather than silently lost.
+- **Dry runs do not write state at all.** A dry run that advanced the cursor would mark those
+  PRs as reported and they would never appear in a real notification.
+
+To inspect or reset the cursor:
+
+```bash
+npx wrangler kv key get --binding=STATE poll-state
+npx wrangler kv key delete --binding=STATE poll-state    # next run looks back 3h
+```
 
 ## Configuration
 
-| Env var | Purpose |
-| --- | --- |
-| `GOOGLE_CHAT_WEBHOOK_URL` | Target Chat Space. Required unless `DRY_RUN=true`. |
-| `GITHUB_TOKEN` | Raises the API rate limit. Supplied automatically in Actions. |
-| `DRY_RUN` | `true` prints the payload instead of posting it. |
-| `HEARTBEAT_MODE` | `always` posts an "all quiet" card when nothing changed. Default is to stay silent. |
+| Binding | Kind | Purpose |
+| --- | --- | --- |
+| `STATE` | KV namespace | Holds the poll cursor. Configured in `wrangler.toml`. |
+| `GITHUB_TOKEN` | secret | Fine-grained PAT, public read-only. **Required** — GraphQL has no anonymous tier. |
+| `GOOGLE_CHAT_WEBHOOK_URL` | secret | Target Chat Space. Required unless `DRY_RUN=true`. |
+| `DRY_RUN` | var | `true` prints the payload instead of posting it. |
+| `HEARTBEAT_MODE` | var | `always` posts an "all quiet" card when a window produced no docs change and no package release. Default is to stay silent. |
 
 Watched repos and tuning constants (section caps, lookback, retention) live in
 [`src/config/repos.ts`](src/config/repos.ts).
+
+To change the cadence, update `crons` in [`wrangler.toml`](wrangler.toml) and keep
+`DEFAULT_LOOKBACK_HOURS` in [`src/config/repos.ts`](src/config/repos.ts) in step with it.
+Cloudflare Cron Triggers are interpreted in UTC.
