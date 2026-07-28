@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd /home/malaika-fiqros/copilotkit/agui/ag-ui && find . -maxdepth 1 -not -path '*/.git*' | sort && echo \"---AGENTS.md---\" && cat AGENTS.md 2>/dev/null | head -100)",
+      "Read(//home/malaika-fiqros/copilotkit/agui/ag-ui/**)",
+      "Bash(npm install *)",
+      "Bash(npx tsc *)",
+      "Bash(echo \"TYPECHECK_EXIT=$?\")",
+      "Bash(npm run *)",
+      "Bash(node --test \"dist/**/*.test.js\")",
+      "Bash(DRY_RUN=true node dist/index.js)",
+      "Bash(node -e ' *)",
+      "Bash(node -e 'fetch\\(\"https://api.github.com/rate_limit\",{headers:{\"User-Agent\":\"x\"}}\\).then\\(r=>r.json\\(\\)\\).then\\(j=>{const c=j.resources.core; console.log\\(`remaining ${c.remaining}/${c.limit}, resets at ${new Date\\(c.reset*1000\\).toISOString\\(\\)}`\\)}\\).catch\\(e=>console.log\\(\"n/a\"\\)\\)')",
+      "Bash(node -e 'fetch\\(\"https://api.github.com/rate_limit\",{headers:{\"User-Agent\":\"x\"}}\\).then\\(r=>r.json\\(\\)\\).then\\(j=>console.log\\(j.resources.core.remaining+\"/\"+j.resources.core.limit\\)\\).catch\\(\\(\\)=>console.log\\(\"n/a\"\\)\\)')"
+    ]
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "repos": {
+    "CopilotKit/CopilotKit": {
+      "lastCheckedISO": "2026-07-26T00:00:00.000Z",
+      "reportedPRs": [],
+      "reportedReleaseIds": [],
+      "reportedPRDates": {}
+    },
+    "ag-ui-protocol/ag-ui": {
+      "lastCheckedISO": "2026-07-20T00:00:00.000Z",
+      "reportedPRs": [],
+      "reportedReleaseIds": [],
+      "reportedPRDates": {}
+    }
+  }
+}
