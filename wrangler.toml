@@ -12,7 +12,7 @@ crons = ["0 */3 * * *"]
 # then paste the printed id below.
 [[kv_namespaces]]
 binding = "STATE"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
+id = "c7e7a9d67a344469858dd7e10ddea61e"
 
 [vars]
 DRY_RUN = "false"
