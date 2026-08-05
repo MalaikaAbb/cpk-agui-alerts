@@ -2,8 +2,9 @@ import { REPOS, repoKey } from "./config/repos.js";
 import { buildRepoReport, isEmpty } from "./report/buildReport.js";
 import { buildChatMessage } from "./report/chatCard.js";
 import { sendToGoogleChat } from "./report/send.js";
+import { bucketsForRelease, drainBuckets } from "./state/buffer.js";
 import { getRepoState, loadState, saveState, updateRepoState } from "./state/store.js";
-import type { Env, Report, RepoReport } from "./types.js";
+import type { Env, Report, RepoReport, RepoState, State } from "./types.js";
 
 /**
  * One poll cycle: read the cursor, collect what landed in each repo since then,
@@ -23,22 +24,18 @@ export async function runPoll(env: Env): Promise<{ sent: boolean; summary: strin
   console.log(`[run] starting at ${nowISO}${dryRun ? " (dry run)" : ""}`);
 
   const state = await loadState(env.STATE);
-  const repoReports: RepoReport[] = [];
+  const fetched: Array<{ key: string; report: RepoReport; repoState: RepoState }> = [];
   const failures: string[] = [];
 
+  // Phase 1 — fetch and buffer. buildRepoReport appends to repoState.buffer in
+  // place; nothing is committed to KV yet.
   for (const config of REPOS) {
     const key = repoKey(config.owner, config.repo);
     const repoState = getRepoState(state, key, nowISO);
 
     try {
       const report = await buildRepoReport(config, repoState, nowISO, env.GITHUB_TOKEN);
-      repoReports.push(report);
-
-      updateRepoState(state, key, {
-        nowISO,
-        reportedPRs: report.prs.map((p) => ({ number: p.pr.number, mergedAt: p.pr.mergedAt })),
-        reportedReleaseIds: report.releases.map((r) => r.id),
-      });
+      fetched.push({ key, report, repoState });
     } catch (err) {
       // One repo being unreachable should not cost us the other repo's report,
       // and its cursor stays put so the window is retried next run.
@@ -48,21 +45,50 @@ export async function runPoll(env: Env): Promise<{ sent: boolean; summary: strin
     }
   }
 
-  const withActivity = repoReports.filter((r) => !isEmpty(r));
+  // Phase 2 — decide, send, and only then commit.
+  const reported = fetched.filter((f) => !isEmpty(f.report));
+  const quiet = fetched.filter((f) => isEmpty(f.report));
   let sent = false;
 
-  if (withActivity.length === 0) {
+  if (reported.length === 0) {
     console.log("[run] no docs changes or package releases in this window");
     if (heartbeat) {
-      await sendHeartbeat(repoReports, nowISO, { dryRun, webhookUrl: env.GOOGLE_CHAT_WEBHOOK_URL });
+      await sendHeartbeat(
+        fetched.map((f) => f.report),
+        nowISO,
+        { dryRun, webhookUrl: env.GOOGLE_CHAT_WEBHOOK_URL },
+      );
     }
   } else {
-    const report: Report = { generatedAtISO: nowISO, repos: withActivity };
+    const report: Report = { generatedAtISO: nowISO, repos: reported.map((r) => r.report) };
     const result = await sendToGoogleChat(buildChatMessage(report), {
       dryRun,
       webhookUrl: env.GOOGLE_CHAT_WEBHOOK_URL,
     });
     sent = result.sent;
+  }
+
+  // A repo with nothing to report can always advance — it was not part of any
+  // message, so there is nothing to lose by moving its cursor forward.
+  for (const entry of quiet) commit(state, entry, nowISO);
+
+  if (sent) {
+    // Confirmed delivered: drain the flushed buckets and advance the cursor.
+    for (const entry of reported) {
+      drainDelivered(entry.repoState, entry.report);
+      commit(state, entry, nowISO);
+    }
+  } else if (reported.length > 0 && !dryRun) {
+    // Leave the cursor AND the buffer untouched for these repos. Advancing the
+    // cursor here would move the window past the release, so the next run would
+    // never re-detect it and the buffered changelog would be stranded forever.
+    //
+    // With a multi-message report this is all-or-nothing: if message 2 of 3
+    // failed, the first was still delivered and the retry will duplicate it.
+    // Duplicated lines are recoverable; a lost changelog is not.
+    console.warn(
+      `[run] send not confirmed — ${reported.length} repo(s) left un-advanced to retry next run`,
+    );
   }
 
   // A dry run must leave no trace: advancing the cursor would mark these PRs as
@@ -82,8 +108,46 @@ export async function runPoll(env: Env): Promise<{ sent: boolean; summary: strin
 
   return {
     sent,
-    summary: withActivity.length === 0 ? "no reportable changes" : `reported ${withActivity.length} repo(s)`,
+    summary:
+      reported.length === 0 ? "no reportable changes" : `reported ${reported.length} repo(s)`,
   };
+}
+
+/** Advance a repo's cursor and record what it reported. */
+function commit(
+  state: State,
+  entry: { key: string; report: RepoReport; repoState: RepoState },
+  nowISO: string,
+): void {
+  updateRepoState(state, entry.key, {
+    nowISO,
+    reportedPRs: entry.report.prs.map((p) => ({
+      number: p.pr.number,
+      mergedAt: p.pr.mergedAt,
+    })),
+    reportedReleaseIds: entry.report.releases.map((r) => r.id),
+    buffer: entry.repoState.buffer,
+  });
+}
+
+/**
+ * Purge the buckets whose changelog just went out.
+ *
+ * A scoped release drains only its own package; a repo-wide one drains
+ * everything. Called only after the webhook confirmed delivery.
+ */
+function drainDelivered(repoState: RepoState, report: RepoReport): void {
+  for (const releaseReport of report.releaseReports) {
+    const buckets = bucketsForRelease(repoState.buffer, releaseReport.scope);
+    drainBuckets(repoState.buffer, buckets);
+
+    if (buckets.length > 0) {
+      console.log(
+        `[${report.key}] drained ${buckets.length} bucket(s) for ${releaseReport.release.tagName}` +
+          ` (${releaseReport.totalChanges} changes)`,
+      );
+    }
+  }
 }
 
 async function sendHeartbeat(
@@ -94,27 +158,29 @@ async function sendHeartbeat(
   const since = reports[0]?.sinceISO ?? nowISO;
 
   await sendToGoogleChat(
-    {
-      text: "No docs changes or package releases in the last poll window.",
-      cardsV2: [
-        {
-          cardId: "heartbeat",
-          card: {
-            header: {
-              title: "No changes",
-              subtitle: `${REPOS.map((r) => r.repo).join(" · ")} — since ${since}`,
-            },
-            sections: [
-              {
-                widgets: [
-                  { textParagraph: { text: "<i>Nothing merged to docs, nothing released.</i>" } },
-                ],
+    [
+      {
+        text: "No docs changes or package releases in the last poll window.",
+        cardsV2: [
+          {
+            cardId: "heartbeat",
+            card: {
+              header: {
+                title: "No changes",
+                subtitle: `${REPOS.map((r) => r.repo).join(" · ")} — since ${since}`,
               },
-            ],
+              sections: [
+                {
+                  widgets: [
+                    { textParagraph: { text: "<i>Nothing merged to docs, nothing released.</i>" } },
+                  ],
+                },
+              ],
+            },
           },
-        },
-      ],
-    },
+        ],
+      },
+    ],
     opts,
   );
 }

@@ -17,22 +17,23 @@ if (!process.env.GITHUB_TOKEN) {
   process.exit(1);
 }
 
-// In-memory KV seeded with a cursor `hoursBack` in the past.
+// In-memory KV seeded with a cursor `hoursBack` in the past. schemaVersion must
+// track SCHEMA_VERSION in state/store.ts, or loadState discards this and falls
+// back to the default lookback.
+const cursor = new Date(Date.now() - hoursBack * 3600_000).toISOString();
+const freshRepo = () => ({
+  lastCheckedISO: cursor,
+  reportedPRs: [],
+  reportedReleaseIds: [],
+  reportedPRDates: {},
+  buffer: { buckets: {}, dropped: {} },
+});
+
 const seeded = JSON.stringify({
-  schemaVersion: 1,
+  schemaVersion: 3,
   repos: {
-    "CopilotKit/CopilotKit": {
-      lastCheckedISO: new Date(Date.now() - hoursBack * 3600_000).toISOString(),
-      reportedPRs: [],
-      reportedReleaseIds: [],
-      reportedPRDates: {},
-    },
-    "ag-ui-protocol/ag-ui": {
-      lastCheckedISO: new Date(Date.now() - hoursBack * 3600_000).toISOString(),
-      reportedPRs: [],
-      reportedReleaseIds: [],
-      reportedPRDates: {},
-    },
+    "CopilotKit/CopilotKit": freshRepo(),
+    "ag-ui-protocol/ag-ui": freshRepo(),
   },
 });
 

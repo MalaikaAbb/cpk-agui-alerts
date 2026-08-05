@@ -35,18 +35,54 @@ To change what counts as a trigger, edit `NOTIFY_TRIGGER_CATEGORIES` in
 Per repo, one card:
 
 - **📦 Packages released** — driven by **releases, not merges**. Lists the package names and
-  versions that were actually published, with the registry where known. No PRs are listed
-  here: a merged package PR is not installable by anyone, so package work stays silent until
-  a release makes it real.
+  versions that were actually published, with the registry where known.
+- **📋 What shipped in `<release>`** — the changelog, **PR-first**. Each PR appears exactly once
+  with the packages it touched nested under it, one line per package listing that package's
+  changed subpaths. In `react-core` those subpaths are the actual symbols
+  (`useFrontendTool, useHumanInTheLoop`), not just `hooks`.
+- **📖 Docs Affected** — documentation the released changes may have made stale: the reference
+  page for each changed symbol, plus the conceptual guides for the packages involved.
 - **📚 Docs** — driven by merges, since docs deploy from `main` rather than being versioned.
-  Every PR listed with its number, title, a one-line excerpt of the PR description, author,
-  and how many files it changed in that area. Capped at 8, with a "+N more" link to the exact
-  GitHub search for the window.
+  Listed **by page**, not by PR: `Mastra — State Rendering`, linked to the live docs page and
+  to the PRs that touched it.
 - **Other areas** — 🧪 Showcase/Demo, 💡 Examples, 🔧 Internal as counts only.
 
 A PR that spans several areas appears under each area it touched, so a small docs change riding
 along with a large refactor still shows up under Docs. A PR that touched **only** package code
 is not shown at all — it will be represented by its release when one ships.
+
+### Buffering
+
+Package changes accumulate in a per-package buffer in KV and are flushed when that package
+releases. A **scoped** tag (`channels/v0.3.0`) drains only its own bucket, so accumulated
+`react-core` work keeps waiting for its own release; a **repo-wide** tag (`v1.63.2`,
+`release/2026-07-28`) drains everything.
+
+**Docs are never buffered.** A docs change is announced within 3 hours of merging and never
+replayed in a later release report — so the buffer holds exactly "package work that has not
+shipped yet".
+
+The buffer is purged only after the webhook confirms delivery — a failed send leaves both the
+buffer and the cursor untouched so the next run retries. Advancing the cursor on failure would
+move the window past the release, stranding the changelog permanently.
+
+Two kinds of noise are deliberately filtered out of changelogs:
+
+- **Manifest-only edits.** A monorepo release PR bumps every `package.json` at once; counting
+  that as a change in each package buried the real work (one release went from 17 entries to 1).
+- **Test-file suffixes.** `delivery-transport.test.ts` reports under `delivery-transport`
+  rather than inventing a `.test` area.
+- **Per-area PR repetition.** An earlier version grouped by `package — area`, which made one PR
+  repeat once per area — a live report listed a single PR eight times with `channels-core` as
+  four separate headings. Grouping PR-first fixed it, and the header now counts PRs, not areas.
+
+### Overflow
+
+A report too large for Google Chat's 32 KB limit is **split across consecutive messages**, never
+truncated — a big release is exactly when the detail matters. Only the first message carries the
+notification text, so a multi-part report pings once. Delivery is all-or-nothing: the buffer is
+purged only when every message lands, so a mid-sequence failure retries the whole set next run
+(which can duplicate lines — recoverable, unlike a lost changelog).
 
 ### How package names are resolved
 
@@ -150,7 +186,7 @@ run it as often as you like.
 
 ```bash
 npm install
-npm test                                  # 96 unit tests, no network
+npm test                                  # 176 unit tests, no network
 npm run typecheck
 npx wrangler dev                          # run the Worker locally
 

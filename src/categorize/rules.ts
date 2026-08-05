@@ -37,6 +37,7 @@ export const copilotKitRules: CategoryRule[] = [
   { pathPrefix: "examples/", category: "Examples" },
 
   { pathPrefix: "dev-docs/", category: "Internal" },
+  { pathPrefix: "patches/", category: "Internal" },
   { pathPrefix: "skills/", category: "Internal" },
   { pathPrefix: ".claude/", category: "Internal" },
   { pathPrefix: ".github/", category: "Internal" },

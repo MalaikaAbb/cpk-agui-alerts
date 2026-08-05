@@ -26,7 +26,12 @@
       "Bash(DRY_RUN=true node dist/dev/dry-run.js 1)",
       "Bash(npx wrangler *)",
       "Bash(chmod 600 .dev.vars)",
-      "Bash(git check-ignore *)"
+      "Bash(git check-ignore *)",
+      "Bash(python3 -c ' *)",
+      "Read(//home/malaika-fiqros/copilotkit/CopilotKit/CopilotKit/**)",
+      "Bash(grep '/$')",
+      "Bash(node /tmp/claude-1000/-home-malaika-fiqros-copilotkit-cpk-agui-alert/470976df-fa14-409c-8d7c-6f2fd0346ef9/scratchpad/mock-release.mjs)",
+      "Bash(node dist/dev/generate-reference-index.js)"
     ]
   }
 }

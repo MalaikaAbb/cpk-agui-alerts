@@ -131,6 +131,89 @@ export interface ClassifiedPR {
   totalFiles: number;
   /** True when GitHub truncated the file list (very large PR). */
   truncated: boolean;
+  /** Human-readable docs labels, e.g. "Mastra — State Rendering". */
+  docsLabels: DocsLabel[];
+  /** Human-readable package labels, e.g. "runtime — agents". */
+  packageLabels: PackageLabel[];
+}
+
+/**
+ * A docs page a change touched, named the way a reader would recognise it
+ * rather than by file path or PR title.
+ */
+export interface DocsLabel {
+  /** Rendered label, e.g. "Mastra — State Rendering". */
+  text: string;
+  /** Public docs URL, when the path maps to one. */
+  url?: string;
+  /** Caveat to surface, e.g. the AG-UI mirror warning or shared-page fan-out. */
+  note?: string;
+}
+
+/** A package area a change touched, e.g. bucket "runtime", text "runtime — agents". */
+export interface PackageLabel {
+  /** Buffer bucket key — the package directory name. */
+  bucket: string;
+  /** The area within the package: a directory, a file stem, or a symbol name. */
+  subpath: string;
+  /** Docs pages this change may have made stale. */
+  docs: DocsAffected[];
+}
+
+/** A docs page a package change may have invalidated. */
+export interface DocsAffected {
+  text: string;
+  url: string;
+  /** Reference pages sort before conceptual guides. */
+  kind: "reference" | "guide";
+}
+
+/**
+ * One merged package change held in the buffer until its package releases.
+ *
+ * Docs changes are NOT buffered — they are reported in the run that finds them
+ * and never replayed, so the buffer holds only unreleased package work.
+ */
+export interface BufferedChange {
+  number: number;
+  title: string;
+  url: string;
+  author: string;
+  mergedAt: string;
+  /**
+   * Subpaths touched, keyed by package. Structured rather than pre-rendered
+   * `pkg — area` strings so the renderer can group by package without parsing.
+   */
+  areas: Record<string, string[]>;
+  /** Docs pages these changes may have invalidated. */
+  docs: DocsAffected[];
+}
+
+/** Pending package changes per package, flushed when that package releases. */
+export interface ChangeBuffer {
+  buckets: Record<string, BufferedChange[]>;
+  /** Entries dropped by the per-bucket cap, keyed by bucket. */
+  dropped: Record<string, number>;
+}
+
+/** One PR in a changelog, with the packages it touched nested under it. */
+export interface ChangelogEntry {
+  change: BufferedChange;
+  packages: Array<{ pkg: string; subpaths: string[] }>;
+}
+
+/** What a release flush produced, ready to render. */
+export interface ReleaseReport {
+  release: Release;
+  /** null for a repo-wide release, which flushes everything. */
+  scope: string | null;
+  /** One entry per PR — a PR is never listed twice. */
+  entries: ChangelogEntry[];
+  /** Deduped docs pages the released changes may have invalidated. */
+  docsAffected: DocsAffected[];
+  /** Distinct PR count, not an area count. */
+  totalChanges: number;
+  droppedCount: number;
 }
 
 export interface RepoReport {
@@ -141,6 +224,8 @@ export interface RepoReport {
   untilISO: string;
   prs: ClassifiedPR[];
   releases: Release[];
+  /** One per release that flushed a buffer bucket in this run. */
+  releaseReports: ReleaseReport[];
 }
 
 export interface Report {
@@ -153,6 +238,8 @@ export interface RepoState {
   /** Dedup safety net against timestamp-boundary double-reporting. */
   reportedPRs: number[];
   reportedReleaseIds: number[];
+  /** Changes accumulated since each package last released. */
+  buffer: ChangeBuffer;
   /**
    * Merge dates keyed by PR number, used to age out `reportedPRs` entries so the
    * state file does not grow without bound.

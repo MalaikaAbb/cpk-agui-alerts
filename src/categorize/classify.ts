@@ -1,9 +1,13 @@
+import { labelDocsPath } from "../labels/docs.js";
+import { labelPackagePath } from "../labels/packages.js";
 import {
   CATEGORY_PRIORITY,
   type Category,
   type CategoryHit,
   type CategoryRule,
   type ClassifiedPR,
+  type DocsLabel,
+  type PackageLabel,
   type PullRequest,
 } from "../types.js";
 
@@ -64,7 +68,41 @@ export function classifyPR(
     categories,
     totalFiles: files.length,
     truncated: opts.truncated ?? false,
+    docsLabels: dedupeDocs(files),
+    packageLabels: dedupePackages(files),
   };
+}
+
+/**
+ * Docs pages this PR touched, deduped — a PR editing three files under one page
+ * should name that page once.
+ */
+function dedupeDocs(files: string[]): DocsLabel[] {
+  const byText = new Map<string, DocsLabel>();
+
+  for (const path of files) {
+    const label = labelDocsPath(path);
+    if (label && !byText.has(label.text)) byText.set(label.text, label);
+  }
+
+  return [...byText.values()].sort((a, b) => a.text.localeCompare(b.text));
+}
+
+/** Package areas this PR touched, deduped by package + subpath. */
+function dedupePackages(files: string[]): PackageLabel[] {
+  const byKey = new Map<string, PackageLabel>();
+
+  for (const path of files) {
+    const label = labelPackagePath(path);
+    if (!label) continue;
+
+    const key = `${label.bucket}/${label.subpath}`;
+    if (!byKey.has(key)) byKey.set(key, label);
+  }
+
+  return [...byKey.values()].sort(
+    (a, b) => a.bucket.localeCompare(b.bucket) || a.subpath.localeCompare(b.subpath),
+  );
 }
 
 /** Categories present on a PR, most prominent first. */

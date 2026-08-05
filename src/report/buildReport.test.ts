@@ -78,6 +78,7 @@ function reportWith(prs: ClassifiedPR[], releases: Release[] = []): RepoReport {
     untilISO: "2026-07-28T12:00:00.000Z",
     prs,
     releases,
+    releaseReports: [],
   };
 }
 
@@ -162,6 +163,7 @@ describe("mergedSearchUrl", () => {
       untilISO: "2026-07-28T12:00:00.000Z",
       prs: [],
       releases: [],
+      releaseReports: [],
     } satisfies RepoReport;
 
     const url = mergedSearchUrl(report);

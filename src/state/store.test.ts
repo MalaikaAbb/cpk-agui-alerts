@@ -9,6 +9,7 @@ import {
   updateRepoState,
 } from "./store.js";
 import { DEFAULT_LOOKBACK_HOURS } from "../config/repos.js";
+import { emptyBuffer } from "./buffer.js";
 import type { KVStore } from "../types.js";
 
 const KEY = "CopilotKit/CopilotKit";
@@ -98,6 +99,7 @@ describe("getRepoState", () => {
       reportedPRs: [1],
       reportedReleaseIds: [9],
       reportedPRDates: { "1": "2026-07-01T00:00:00.000Z" },
+      buffer: emptyBuffer(),
     };
 
     assert.equal(getRepoState(state, KEY, NOW).lastCheckedISO, "2026-07-01T00:00:00.000Z");
@@ -126,6 +128,7 @@ describe("updateRepoState", () => {
       reportedPRs: [10],
       reportedReleaseIds: [1],
       reportedPRDates: { "10": "2026-07-28T05:00:00.000Z" },
+      buffer: emptyBuffer(),
     };
 
     updateRepoState(state, KEY, {
@@ -148,6 +151,7 @@ describe("updateRepoState", () => {
         "1": "2026-01-01T00:00:00.000Z",
         "2": "2026-07-20T00:00:00.000Z",
       },
+      buffer: emptyBuffer(),
     };
 
     updateRepoState(state, KEY, { nowISO: NOW, reportedPRs: [], reportedReleaseIds: [] });
@@ -163,6 +167,7 @@ describe("updateRepoState", () => {
       reportedPRs: [],
       reportedReleaseIds: [],
       reportedPRDates: {},
+      buffer: emptyBuffer(),
     };
 
     updateRepoState(state, KEY, { nowISO: NOW, reportedPRs: [], reportedReleaseIds: [] });

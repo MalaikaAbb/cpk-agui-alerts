@@ -1,8 +1,10 @@
 import { classifyPR } from "../categorize/classify.js";
 import { repoKey } from "../config/repos.js";
 import { fetchMergedPulls, fetchReleasesSince } from "../github/graphql.js";
+import { parseTagScope } from "../github/packages.js";
+import { appendToBuffer, buildReleaseReport } from "../state/buffer.js";
 import { NOTIFY_TRIGGER_CATEGORIES, RELEASE_DRIVEN_CATEGORIES } from "../types.js";
-import type { ClassifiedPR, RepoConfig, RepoReport, RepoState } from "../types.js";
+import type { ClassifiedPR, ReleaseReport, RepoConfig, RepoReport, RepoState } from "../types.js";
 
 /**
  * Collect and classify everything that landed in one repo since its cursor.
@@ -35,6 +37,10 @@ export async function buildRepoReport(
     classifyPR(pr, files, config.rules, { truncated }),
   );
 
+  // Buffer BEFORE resolving releases: a PR that merges and releases inside the
+  // same 3-hour window must still appear in its own release report.
+  appendToBuffer(repoState.buffer, classified);
+
   const newReleases = await fetchReleasesSince(
     owner,
     repo,
@@ -45,6 +51,15 @@ export async function buildRepoReport(
   const seenReleases = new Set(repoState.reportedReleaseIds);
   const freshReleases = newReleases.filter((r) => !seenReleases.has(r.id));
 
+  // Oldest first, and sharing one `claimed` set, so several releases in a single
+  // window partition the buffer between them rather than each repeating all of it.
+  const claimed = new Set<number>();
+  const releaseReports: ReleaseReport[] = [...freshReleases]
+    .sort((a, b) => Date.parse(a.publishedAt) - Date.parse(b.publishedAt))
+    .map((release) =>
+      buildReleaseReport(repoState.buffer, release, parseTagScope(release.tagName), claimed),
+    );
+
   return {
     key,
     owner,
@@ -53,6 +68,7 @@ export async function buildRepoReport(
     untilISO: nowISO,
     prs: classified,
     releases: freshReleases,
+    releaseReports,
   };
 }
 
